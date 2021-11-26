@@ -9,8 +9,9 @@ from queue import Queue
 SERVER_RECORD = {}
 WORK_ASSIGN_RECORD = {}
 PENDING_JOB = Queue(maxsize=0)
+FILE_SIZE_HISTORY = []
 
-DEFAULT_FILESIZE = 50
+FILESIZE_AVE = 50
 DEFAULT_CAPACITY = 50
 
 
@@ -50,23 +51,21 @@ def getCompletedFilename(filename):
     file_size = SERVER_RECORD[server_to_send]["unfinished_work"][filename][0]
 
 
-    # Update capacity using the first file (it is helpful to find super slow servers)
+    # Update capacity using the first file (It is not accurate indeed, but it is helpful to find super slow servers)
     if SERVER_RECORD[server_to_send]["capacity"] == -1:
         if file_size != -1:
             SERVER_RECORD[server_to_send]["capacity"] = file_size / JCT
         else:
-            SERVER_RECORD[server_to_send]["capacity"] = DEFAULT_FILESIZE / JCT
+            SERVER_RECORD[server_to_send]["capacity"] = FILESIZE_AVE / JCT
 
-    # Delete the job from unfinished job
     del SERVER_RECORD[server_to_send]["unfinished_work"][filename]
-
-    # Update workload
     if file_size != -1:
         SERVER_RECORD[server_to_send]["workload"] -= file_size
     else:
-        SERVER_RECORD[server_to_send]["workload"] -= DEFAULT_FILESIZE
+        SERVER_RECORD[server_to_send]["workload"] -= FILESIZE_AVE
 
     # print message
+    print(SERVER_RECORD)
     print(f"[JobScheduler] Filename {filename} is finished. Server{server_to_send}(WL:{SERVER_RECORD[server_to_send]['workload']}):{JCT}s")
 
 # formatting: to assign server to the request
@@ -98,7 +97,8 @@ def assignServerToRequest(servernames, request):
     # Find a good server to send to
     # Policy: Find the server with the maximum remaining capacity
     server_choice_id = 0
-    capacity_max = 0
+    server_spec = SERVER_RECORD[servernames[server_choice_id]]
+    least_amount_of_work = server_spec["workload"] / server_spec["capacity"]
     can_send = False
 
     for server_id in range(0, len(servernames)):
@@ -112,34 +112,33 @@ def assignServerToRequest(servernames, request):
                 capacity = sys.float_info.max
         else:
             capacity = server_spec_candidate["capacity"]
-        if server_spec_candidate["workload"] == 0:
             can_send = True
-            if capacity > capacity_max:
-                server_choice_id = server_id
-                capacity_max = capacity
+        least_amount_of_work_candidate = server_spec_candidate["workload"] / capacity
+        if abs(least_amount_of_work_candidate) < abs(least_amount_of_work):
+            server_choice_id = server_id
+            server_spec = server_spec_candidate
+            least_amount_of_work = least_amount_of_work_candidate
 
     server_to_send = servernames[server_choice_id]
     ####################################################
 
+    # Schedule the job
+    scheduled_request = scheduleJobToServer(server_to_send, request)
     # If cannot send, put it in Q
     if (not can_send) and not first_round(servernames):
         PENDING_JOB.put(request)
         return b""
-
-    # Schedule the job if can send
-    scheduled_request = scheduleJobToServer(server_to_send, request)
     # Record the stats if can send
     SERVER_RECORD[server_to_send]["unfinished_work"][request_name] = (request_size, request_timestamp)
     if request_size == -1:
-        SERVER_RECORD[server_to_send]["workload"] += DEFAULT_FILESIZE
+        SERVER_RECORD[server_to_send]["workload"] += FILESIZE_AVE
     else:
         SERVER_RECORD[server_to_send]["workload"] += request_size
     WORK_ASSIGN_RECORD[request_name] = server_to_send
     # print(f"time:{(time.time() - request_timestamp)*1000}")
     if first_round(servernames):
         first_job_dispatching += 1
-        # print(f"{first_job_dispatching} time! {server_to_send}")
-    # print(SERVER_RECORD)
+        print(f"{first_job_dispatching} time! {server_to_send}")
     return scheduled_request
 
 
@@ -193,11 +192,9 @@ if __name__ == "__main__":
     currSeconds = -1
     now = datetime.now()
     while (True):
-        if not PENDING_JOB.empty():
+        if PENDING_JOB.qsize() > 0:
             top_delay_request = PENDING_JOB.get()
-            sendToServers = assignServerToRequest(servernames, top_delay_request)
-            if sendToServers != b"":
-                serverSocket.send(sendToServers)
+            assignServerToRequest(servernames, top_delay_request)
         try:
             # receive the completed filenames from server
             completeFilenames = serverSocket.recv(4096)
@@ -208,6 +205,6 @@ if __name__ == "__main__":
             pass
 
         # # Example printAll API : let servers print status in every seconds
-        # if (datetime.now() - now).seconds > currSeconds:
-            # currSeconds = currSeconds + 1
-            # sendPrintAll(serverSocket)
+        if (datetime.now() - now).seconds > currSeconds:
+            currSeconds = currSeconds + 1
+            sendPrintAll(serverSocket)

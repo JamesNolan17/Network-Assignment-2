@@ -17,7 +17,7 @@ if __name__ == "__main__":
 
     # load filename and filesize
     map_filename_to_filesize = {}
-    with open("./config_client", 'r') as clientConfig:
+    with open("config_client", 'r') as clientConfig:
         for line in clientConfig.readlines():
             if line[0] == "#":
                 continue
